@@ -159,6 +159,64 @@ function clampNote(value) {
   return out;
 }
 
+const TR_MONTHS = [
+  "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+  "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+];
+
+function isCalendarDay(text) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const year = Number(text.slice(0, 4));
+  const month = Number(text.slice(5, 7));
+  const day = Number(text.slice(8, 10));
+  if (year < 1 || month < 1 || month > 12) return false;
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  return probe.getUTCFullYear() === year
+    && probe.getUTCMonth() === month - 1
+    && probe.getUTCDate() === day;
+}
+
+function fallbackIstanbul(now) {
+  const shifted = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+  const year = String(shifted.getUTCFullYear());
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+  const text = year + "-" + month + "-" + day;
+  return isCalendarDay(text) ? text : "";
+}
+
+function istanbulDay(now) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Europe/Istanbul",
+      calendar: "gregory",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now);
+    const take = function (type) {
+      const found = parts.find(function (part) { return part.type === type; });
+      return found && found.value ? found.value.replace(/\D/g, "") : "";
+    };
+    const year = take("year");
+    const month = take("month");
+    const day = take("day");
+    if (year.length !== 4 || month.length < 1 || month.length > 2 || day.length < 1 || day.length > 2) {
+      return fallbackIstanbul(now);
+    }
+    const text = year + "-" + month.padStart(2, "0") + "-" + day.padStart(2, "0");
+    return isCalendarDay(text) ? text : fallbackIstanbul(now);
+  } catch (err) {
+    return fallbackIstanbul(now);
+  }
+}
+
+function formatDelivery(iso) {
+  const day = String(Number(iso.slice(8, 10)));
+  const month = TR_MONTHS[Number(iso.slice(5, 7)) - 1];
+  return day + " " + month + " " + iso.slice(0, 4);
+}
+
 function noteToSend(checked, value) {
   if (!checked) return null;
   const note = cleanText(value);
@@ -344,6 +402,8 @@ function boot() {
   const noteToggle = document.getElementById("not-ekle");
   const noteBox = document.getElementById("not-alani");
   const noteInput = document.getElementById("not");
+  const deliveryInput = document.getElementById("teslim");
+  const deliveryText = document.getElementById("teslim-gun");
   const hpInput = document.getElementById("hp");
   const changedBanner = document.getElementById("guncelleme");
   const durum = document.getElementById("durum");
@@ -712,6 +772,28 @@ function boot() {
     if (next !== noteInput.value) noteInput.value = next;
   });
 
+  function showDelivery(iso) {
+    deliveryInput.value = iso;
+    deliveryText.textContent = formatDelivery(iso);
+  }
+
+  function chosenDelivery() {
+    const value = deliveryInput.value;
+    if (isCalendarDay(value)) return value;
+    const today = istanbulDay(new Date());
+    if (today) showDelivery(today);
+    return today;
+  }
+
+  const openingDay = istanbulDay(new Date());
+  if (openingDay) showDelivery(openingDay);
+
+  deliveryInput.addEventListener("change", function () {
+    const value = deliveryInput.value;
+    if (isCalendarDay(value)) showDelivery(value);
+    else if (openingDay) showDelivery(istanbulDay(new Date()) || openingDay);
+  });
+
   function selectedLines() {
     const lines = [];
     const seen = Object.create(null);
@@ -881,6 +963,8 @@ function boot() {
     if (note === "over") return;
     const lines = selectedLines();
     if (lines.length < 1 || lines.length > 100 || !current || current.cv === null) return;
+    const delivery = chosenDelivery();
+    if (!isCalendarDay(delivery)) return;
     const payload = {
       v: 1,
       k: code,
@@ -891,6 +975,7 @@ function boot() {
       lines: lines.map(function (line) { return { p: line.p, q: line.q }; }),
       hp: typeof hpInput.value === "string" ? hpInput.value : "",
       t: Math.max(0, Date.now() - openedAt),
+      delivery: delivery,
     };
     const url = catalogUrl(code);
     if (!url) return;
